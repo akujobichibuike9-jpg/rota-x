@@ -119,8 +119,8 @@ button.row:active{background:var(--surface2)}
 
 /* tab bar: floating frosted-glass circles */
 .tabbar{position:fixed;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom));z-index:30;display:flex;justify-content:center;pointer-events:none}
-.tabbar-in{display:flex;gap:14px}
-.tabbar button{pointer-events:auto;position:relative;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;color:var(--text2);
+.tabbar-in{display:flex;gap:12px}
+.tabbar button{pointer-events:auto;position:relative;width:56px;height:56px;border-radius:50%;display:grid;place-items:center;color:var(--text2);
   background:var(--glass);backdrop-filter:blur(18px) saturate(190%);-webkit-backdrop-filter:blur(18px) saturate(190%);
   border:1px solid var(--glass-edge);box-shadow:inset 0 1px 1px var(--glass-hi),inset 0 -1px 1px var(--glass-lo),0 10px 24px -10px rgba(16,24,40,.35),0 2px 6px -2px rgba(16,24,40,.12);
   transition:transform .25s cubic-bezier(.3,1.4,.5,1),background .2s,color .2s}
@@ -310,13 +310,14 @@ const LOGO='<svg viewBox="0 0 64 64"><use href="#logo"/></svg>';
 
 /* ---------- state: saved on this device ---------- */
 const LS='rotax.v1';
-const blank=()=>({prefs:{theme:'system',onboarded:false},profile:{hd:'',venue:'',manager:'',staff:[]},weeks:{},sync:{venueId:null,ds:{},dsh:{},dv:0,linked:null,last:null}});
+const blank=()=>({prefs:{theme:'system',onboarded:false},profile:{hd:'',venue:'',manager:'',staff:[]},weeks:{},sent:{},sync:{venueId:null,ds:{},dsh:{},dv:0,linked:null,last:null}});
 let S=blank();
 try{const r=localStorage.getItem(LS);if(r){const o=JSON.parse(r);S={...blank(),...o,prefs:{...blank().prefs,...o.prefs},profile:{...blank().profile,...o.profile},sync:{...blank().sync,...o.sync}};delete S.account}}catch(e){}
 let saveOk=true;
 function save(){try{localStorage.setItem(LS,JSON.stringify(S));saveOk=true}catch(e){saveOk=false}}
 
-const ui={tab:'rota',week:mondayOf(TODAY),day:TODAY,view:'day'};
+const ui={tab:'rota',week:mondayOf(TODAY),day:TODAY,view:'day',hq:''};
+let isAdmin=false;
 let sheet=null;
 
 const staffById=id=>S.profile.staff.find(s=>s.id===id);
@@ -399,7 +400,8 @@ async function pull(){
   if(!sb||!session||!S.sync.venueId)return;
   try{
     const vid=S.sync.venueId,from=addDays(TODAY,-182);
-    const [v,st,sh]=await Promise.all([sb.from('venues').select('*').eq('id',vid).maybeSingle(),sb.from('staff').select('*').eq('venue_id',vid),sb.from('shifts').select('*').eq('venue_id',vid).gte('shift_date',from).limit(5000)]);
+    const paged=async q=>{const out=[];for(let i=0;;i+=1000){const r=await q().range(i,i+999);if(r.error)return r;out.push(...r.data);if(r.data.length<1000)return{data:out,error:null}}};
+    const [v,st,sh]=await Promise.all([sb.from('venues').select('*').eq('id',vid).maybeSingle(),paged(()=>sb.from('staff').select('*').eq('venue_id',vid).order('id')),paged(()=>sb.from('shifts').select('*').eq('venue_id',vid).gte('shift_date',from).order('id'))]);
     const err=v.error||st.error||sh.error;if(err)throw err;
     if(!v.data){S.sync.venueId=null;S.sync.linked=null;save();return startSync()}
     if(!S.sync.dv&&newer(v.data.updated_at,S.profile.u))Object.assign(S.profile,{venue:v.data.name,hd:v.data.head_doorman,manager:v.data.area_manager,u:v.data.updated_at});
@@ -414,7 +416,7 @@ async function pull(){
   }catch(e){console.warn('pull',e);setSyncState(navigator.onLine===false?'offline':'error')}
 }
 async function ensureVenue(){
-  const {data,error}=await sb.from('venues').select('*').order('created_at').limit(1);if(error)throw error;
+  const {data,error}=await sb.from('venues').select('*').eq('owner_id',session.user.id).order('created_at').limit(1);if(error)throw error;
   let existed=false;
   if(data.length){existed=true;const v=data[0];S.sync.venueId=v.id;
     if(!isSetUp())Object.assign(S.profile,{venue:v.name,hd:v.head_doorman,manager:v.area_manager,u:v.updated_at})}
@@ -427,7 +429,9 @@ async function startSync(){
   if(!sb||!session||starting)return;starting=true;setSyncState('syncing');
   try{await ensureVenue();if(S.sync.venueId){await push();await pull()}else setSyncState('idle')}
   catch(e){console.warn('sync',e);setSyncState(navigator.onLine===false?'offline':'error')}
-  starting=false;render();
+  starting=false;
+  try{const {data}=await sb.from('admins').select('user_id').eq('user_id',session.user.id).maybeSingle();isAdmin=!!data}catch(e){}
+  render();
 }
 if(sb){
   sb.auth.onAuthStateChange((ev,sess)=>{
@@ -468,7 +472,7 @@ async function authSubmit(kind,btn){
 async function signOut(){
   try{await push()}catch(e){}
   try{await sb.auth.signOut()}catch(e){}
-  const theme=S.prefs.theme;S=blank();S.prefs.theme=theme;session=null;save();ui.tab='rota';closeSheet();toast('Signed out');
+  const theme=S.prefs.theme;S=blank();S.prefs.theme=theme;session=null;isAdmin=false;save();ui.tab='rota';closeSheet();toast('Signed out');
 }
 
 /* ---------- suggestions ---------- */
@@ -500,14 +504,14 @@ function render(){
   if(!S.prefs.onboarded){renderWelcome();return}
   if(!isSetUp()){renderSetup();return}
   renderTop();renderNav();
-  ({rota:renderRota,staff:renderStaff,send:renderSend,settings:renderSettings})[ui.tab]();
+  ({rota:renderRota,staff:renderStaff,history:renderHistory,send:renderSend,settings:renderSettings})[ui.tab]();
 }
 function renderTop(){
   const isThis=ui.week===mondayOf(TODAY);
   $('top').innerHTML=`<div class="top-in"><div class="brand">${LOGO}<div style="min-width:0"><div class="venue">${esc(S.profile.venue)}</div><div class="sub2">${esc(S.profile.hd)}</div></div></div>
   <div class="weeknav"><button data-act="wk" data-n="-1" aria-label="Previous week">${I('left',18)}</button><div class="wk" data-act="thisweek" title="Go to this week">${isThis?'This week':weekLabel(ui.week)}</div><button data-act="wk" data-n="1" aria-label="Next week">${I('right',18)}</button></div></div>`;
 }
-const TABS=[['rota','Rota','cal'],['staff','Team','users'],['send','Send','send'],['settings','Settings','gear']];
+const TABS=[['rota','Rota','cal'],['staff','Team','users'],['history','History','clock'],['send','Send','send'],['settings','Settings','gear']];
 function renderNav(){
   const nav=$('nav');
   if(!nav.dataset.built){nav.innerHTML='<div class="tabbar-in">'+TABS.map(([t,l,ic])=>`<button data-act="tab" data-t="${t}">${I(ic)}<span>${l}</span></button>`).join('')+'</div>';nav.dataset.built=1}
@@ -601,7 +605,7 @@ function renderSend(){
     h+=`<tr class="tot"><td>Total</td>${[0,1,2,3,4,5,6].map(i=>`<td>${r1(dayShifts(addDays(ui.week,i)).reduce((a,s)=>a+hrs(s.start,s.end),0))||''}</td>`).join('')}<td class="num">${r1(total)}</td></tr></tbody></table>`;
   }
   h+=`</div><div class="export"><button class="btn primary block" data-act="image">${I('image',18)}Share as image</button><div class="two"><button class="btn secondary" data-act="xlsx">${I('dl',18)}Excel file</button><button class="btn secondary" data-act="copytxt">${I('msg',18)}Copy message</button></div></div>
-  <div class="foot">The image uses the ${ui.view==='day'?'“By night”':'“By door supervisor”'} layout shown above.</div>`;
+  <div class="foot">The image uses the ${ui.view==='day'?'“By night”':'“By door supervisor”'} layout shown above.${S.sent[ui.week]?`<br>Last sent ${fmtWhen(S.sent[ui.week].at)} as ${S.sent[ui.week].how}.`:''}</div>`;
   $('main').innerHTML=h;
 }
 
@@ -619,6 +623,7 @@ function renderSettings(){
   <div class="section">Account</div>
   <div class="card">
     ${session?`<div class="srow"><div style="min-width:0"><div class="t" style="overflow:hidden;text-overflow:ellipsis">${esc(session.user.email)}</div><div class="d">${syncLine()}</div></div><span class="dot ${syncDot()}"></span></div>
+      ${isAdmin?`<a class="srow" href="admin.html" style="color:inherit;text-decoration:none"><div><div class="t">Admin dashboard</div><div class="d">See every venue, door supervisor and shift</div></div><span class="r">${I('right',18)}</span></a>`:''}
       <button class="srow" data-act="syncnow"><div><div class="t">Sync now</div></div><span class="r">${I('repeat',18)}</span></button>
       <button class="srow red" data-act="signout"><div><div class="t">Sign out</div></div></button>`
     :`<button class="srow" data-act="signup"><div><div class="t">Create account</div><div class="d">Back up and use rota-x on other devices</div></div><span class="r">${I('right',18)}</span></button>
@@ -635,6 +640,46 @@ function renderSettings(){
 function syncLine(){const n=pendingCount();const t=S.sync.last?new Date(S.sync.last).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';
   return {syncing:'Syncing…',synced:`Up to date${t?' · last synced '+t:''}`,pending:`${n} change${n===1?'':'s'} waiting to sync`,offline:'Offline. Changes will sync when you’re back online.',error:'Couldn’t sync. Tap Sync now to try again.',idle:'Signed in'}[syncState]||'Signed in'}
 function syncDot(){return {synced:'ok',syncing:'busy',pending:'busy',offline:'bad',error:'bad'}[syncState]||''}
+
+/* ---------- history ---------- */
+const fmtWhen=iso=>new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+function markSent(how){S.sent=S.sent||{};S.sent[ui.week]={at:new Date().toISOString(),how};save()}
+function renderHistory(){
+  $('main').innerHTML=`<div class="pagehead"><h2>History</h2><span class="meta">${esc(S.profile.venue)}</span></div>
+  <div class="search" style="margin-bottom:12px">${I('search',18)}<input class="input" id="hq" data-in="hq" placeholder="Search a door supervisor’s shifts" autocomplete="off" value="${esc(ui.hq)}"></div>
+  <div id="hlist"></div>`;
+  renderHistoryList();
+}
+function shiftTable(list){
+  return `<div class="tablewrap"><table><thead><tr><th>Date</th><th>Time</th><th class="num">Hours</th></tr></thead><tbody>${list.map(({d,s})=>`<tr data-act="openday" data-d="${d}" style="cursor:pointer"><td class="nowrap">${shortD(d)} ${pd(d).getFullYear()!==pd(TODAY).getFullYear()?pd(d).getFullYear():''}</td><td class="nowrap">${s.start}–${s.end}</td><td class="num">${hrs(s.start,s.end)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function renderHistoryList(){
+  const q=ui.hq.trim().toLowerCase();let h='';
+  if(q){
+    const people=S.profile.staff.filter(p=>p.name.toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+    if(!people.length)h=`<div class="card empty"><h3>No one found</h3><p>No door supervisor at ${esc(S.profile.venue)} matches “${esc(ui.hq.trim())}”.</p></div>`;
+    people.slice(0,10).forEach(p=>{
+      const mine=allShifts().filter(x=>x.s.sid===p.id).sort((a,b)=>a.d.localeCompare(b.d));
+      const up=mine.filter(x=>x.d>=TODAY),past=mine.filter(x=>x.d<TODAY).reverse();
+      const hrsAll=r1(mine.reduce((a,x)=>a+hrs(x.s.start,x.s.end),0));
+      h+=`<div class="card"><div class="row" style="border:0">${av(p.name)}<div style="flex:1;min-width:0"><div class="nm">${esc(p.name)}${p.archived?' <span class="badge">Removed</span>':''}</div><div class="s">${mine.length} shift${mine.length===1?'':'s'} · ${hrsAll} hrs on record</div></div></div></div>
+      <div class="section" style="margin-top:4px">Upcoming</div>${up.length?shiftTable(up):'<div class="meta" style="padding:0 4px 8px">Nothing scheduled.</div>'}
+      <div class="section">Previous</div>${past.length?shiftTable(past.slice(0,60)):'<div class="meta" style="padding:0 4px 8px">No previous shifts.</div>'}${past.length>60?`<div class="foot">Showing the latest 60 of ${past.length}.</div>`:''}<div style="height:14px"></div>`;
+    });
+  }else{
+    const weeks=Object.keys(S.weeks).filter(w=>[0,1,2,3,4,5,6].some(i=>dayShifts(addDays(w,i)).length)).sort().reverse();
+    if(!weeks.length){h=`<div class="card empty"><div class="ico">${I('clock')}</div><h3>No rotas yet</h3><p>Weeks you build will appear here so you can look back or resend them.</p></div>`}
+    else{
+      const cur=mondayOf(TODAY);let lastGroup='';
+      weeks.forEach(w=>{const g=w>cur?'Upcoming':w===cur?'This week':'Previous weeks';
+        if(g!==lastGroup){if(lastGroup)h+='</div>';h+=`<div class="section">${g}</div><div class="card">`;lastGroup=g}
+        const st=weekStats(w),sent=S.sent&&S.sent[w];
+        h+=`<button class="row" data-act="openweek" data-w="${w}"><span class="grow"><span style="min-width:0"><span class="nm" style="display:block">${weekLabel(w)} ${pd(w).getFullYear()}</span><span class="s" style="display:block">${st.count} shifts · ${st.people} staff · ${r1(st.total)} hrs</span></span></span>${sent?`<span class="badge" title="Sent ${fmtWhen(sent.at)}">Sent ${new Date(sent.at).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span>`:''}<span style="color:var(--text3)">${I('right',18)}</span></button>`});
+      h+='</div>';
+    }
+  }
+  $('hlist').innerHTML=h;
+}
 
 /* ---------- sheets ---------- */
 function openSheet(s){sheet=s;renderSheet();$('scrim').classList.add('on');$('sheet').classList.add('on')}
@@ -772,8 +817,8 @@ document.addEventListener('click',e=>{
     case'signout':openSheet({type:'confirm',title:'Sign out?',text:'Your data is backed up to your account and will be removed from this device. Sign in again to get it back.',ok:'dosignout',okLabel:'Sign out'});break;
     case'dosignout':signOut();break;
     case'image':makeImage();break;
-    case'shareimg':shareImage();break;
-    case'saveimg':saveFile(imgName(),sheet.blob,'image/png').then(ok=>ok&&toast('Image saved'));break;
+    case'shareimg':markSent('image');shareImage();break;
+    case'saveimg':saveFile(imgName(),sheet.blob,'image/png').then(ok=>{if(ok){markSent('image');toast('Image saved')}});break;
     case'setup':{const hd=$('s_hd').value.trim(),v=$('s_venue').value.trim();if(!hd||!v){toast('Enter your name and venue');break}
       Object.assign(S.profile,{hd,venue:v,manager:$('s_mgr').value.trim()});markVenue();if(session)startSync();ui.tab=S.profile.staff.length?'rota':'staff';render();break}
     case'tab':ui.tab=D.t;render();scrollTo(0,0);break;
@@ -805,9 +850,11 @@ document.addEventListener('click',e=>{
     case'savestaff':{const p=staffById(sheet.id),x=sheet.draft;if(!x.name.trim()){toast('Name is required');break}Object.assign(p,{name:x.name.trim(),phone:x.phone.trim(),sia:x.sia.trim(),exp:x.exp});markStaff(p);closeSheet();break}
     case'delstaff':{const p=staffById(sheet.id);p.archived=true;markStaff(p);closeSheet();toast(`${p.name} removed`);break}
     case'view':ui.view=D.v;render();break;
-    case'xlsx':downloadXlsx();break;
+    case'openweek':ui.week=D.w;ui.day=D.w;ui.tab='send';render();scrollTo(0,0);break;
+    case'openday':ui.week=mondayOf(D.d);ui.day=D.d;ui.tab='rota';render();scrollTo(0,0);break;
+    case'xlsx':downloadXlsx().then(()=>markSent('Excel'));break;
     case'copytsv':copyText(tsvRows().map(r=>r.join('\t')).join('\n'),'Table copied');break;
-    case'copytxt':copyText(messageText(),'Message copied');break;
+    case'copytxt':markSent('message');copyText(messageText(),'Message copied');break;
     case'backup':saveFile(`rota-x backup ${TODAY}.json`,JSON.stringify(S,null,1),'application/json').then(ok=>ok&&toast('Backup exported'));break;
     case'restore':$('restorefile').click();break;
     case'reset':openSheet({type:'confirm',title:'Delete all data?',text:'Your team, rotas and settings will be permanently removed from this device. Export a backup first if you may need them.',ok:'doreset',okLabel:'Delete'});break;
@@ -822,6 +869,7 @@ $('restorefile').addEventListener('change',async e=>{
 document.addEventListener('input',e=>{
   const k=e.target.dataset.in;if(!k)return;const v=e.target.value;
   if(k==='q'){sheet.q=v;renderPickList()}
+  else if(k==='hq'){ui.hq=v;renderHistoryList()}
   else if(k==='venue'||k==='hd'||k==='manager'){S.profile[k]=v;markVenue();renderTop()}
   else if(k==='dstart'&&v)sheet.draft.start=v;
   else if(k==='dend'&&v)sheet.draft.end=v;

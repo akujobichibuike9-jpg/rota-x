@@ -1,6 +1,6 @@
 // rota-x service worker: keeps the app itself available offline.
 // Only this site's own files are cached; data calls to Supabase always go to the network.
-const CACHE = 'rotax-v3';
+const CACHE = 'rotax-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './vendor/supabase.js', './vendor/xlsx.full.min.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', e => {
