@@ -363,7 +363,7 @@ async function saveFile(name,data,mime){
 
 /* ---------- accounts & sync (Supabase) ---------- */
 const SB_URL='https://axpieuekaewjslsobqxn.supabase.co',SB_KEY='sb_publishable_0akKFlWeC2gsYMP-eTIWIQ_TH4TT3w3';
-let sb=null,session=null,syncState='idle',pushTimer=null,pushing=false,starting=false;
+let authReady=false,sb=null,session=null,syncState='idle',pushTimer=null,pushing=false,starting=false;
 try{if(window.supabase)sb=supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}})}catch(e){}
 const nowIso=()=>new Date().toISOString();
 const newer=(a,b)=>!b||Date.parse(a)>Date.parse(b);
@@ -374,7 +374,7 @@ function markShift(s,d){s.u=nowIso();S.sync.dsh[s.id]={d,u:s.u};queue()}
 function killShift(s,d){S.sync.dsh[s.id]={d,u:nowIso(),del:{sid:s.sid,start:s.start,end:s.end}};queue()}
 function markVenue(){S.profile.u=nowIso();S.sync.dv=1;queue()}
 function markAll(withVenue){const t=nowIso();S.profile.staff.forEach(p=>{p.u=p.u||t;S.sync.ds[p.id]=p.u});allShifts().forEach(({d,s})=>{s.u=s.u||t;S.sync.dsh[s.id]={d,u:s.u}});if(withVenue){S.profile.u=S.profile.u||t;S.sync.dv=1}queue()}
-function setSyncState(st){syncState=st;if(ui.tab==='settings'&&!sheet&&S.prefs.onboarded&&isSetUp())renderSettings()}
+function setSyncState(st){syncState=st;if(ui.tab==='settings'&&!sheet&&session&&isSetUp())renderSettings()}
 const pendingCount=()=>Object.keys(S.sync.ds).length+Object.keys(S.sync.dsh).length+(S.sync.dv?1:0);
 const shiftRow=(vid,id,d,x,del,u)=>({venue_id:vid,id,shift_date:d,staff_id:x.sid,start_time:x.start,end_time:x.end,deleted:del,updated_at:u});
 async function push(){
@@ -436,8 +436,9 @@ async function startSync(){
 if(sb){
   sb.auth.onAuthStateChange((ev,sess)=>{
     session=sess;
+    if(!authReady){authReady=true;setTimeout(()=>{render();hideSplash()},0)}
     if(ev==='PASSWORD_RECOVERY'){setTimeout(()=>openSheet({type:'newpw'}),60);return}
-    if(sess&&(ev==='SIGNED_IN'||ev==='INITIAL_SESSION')){S.prefs.onboarded=true;save();setTimeout(()=>{render();startSync()},0)}
+    if(sess&&(ev==='SIGNED_IN'||ev==='INITIAL_SESSION')){setTimeout(()=>{render();startSync()},0)}
     if(ev==='SIGNED_OUT')setTimeout(render,0);
   });
   setInterval(()=>{if(session&&document.visibilityState==='visible')pull()},60000);
@@ -498,11 +499,13 @@ function suggest(d){
 /* ---------- render ---------- */
 const $=id=>document.getElementById(id);
 function render(){
-  const inApp=S.prefs.onboarded&&isSetUp();
+  const inApp=!!session&&isSetUp();
   $('top').style.display=inApp?'':'none';
   $('nav').style.display=inApp?'':'none';
-  if(!S.prefs.onboarded){renderWelcome();return}
-  if(!isSetUp()){renderSetup();return}
+  if(!sb){$('main').innerHTML='<div class="welcome"><h1>Can’t start rota-x</h1><p class="lead">Part of the app didn’t load. Check your connection and reopen it.</p></div>';return}
+  if(!authReady){$('main').innerHTML='';return}
+  if(!session){renderWelcome();return}
+  if(!isSetUp()){if(starting){$('main').innerHTML='<div class="welcome" style="text-align:center"><p class="lead">Loading your venue…</p></div>';return}renderSetup();return}
   renderTop();renderNav();
   ({rota:renderRota,staff:renderStaff,history:renderHistory,send:renderSend,settings:renderSettings})[ui.tab]();
 }
@@ -524,9 +527,8 @@ function renderWelcome(){
   <p class="lead">Plan your venue’s door rota and send it to your area manager in minutes.</p>
   <ul class="feat"><li>${I('check')}Select who’s working. Hours fill in automatically.</li><li>${I('check')}Regulars are suggested for each night.</li><li>${I('check')}Export to Excel or share as a message.</li></ul>
   <button class="btn primary block" data-act="signup">Create account</button>
-  <button class="btn secondary block" style="margin-top:10px" data-act="nologin">Continue without account</button>
-  <div class="fine">Without an account, your data is stored on this device only.</div>
-  <button class="btn link block" style="margin-top:12px" data-act="signin">Already have an account? Sign in</button></div>`;
+  <button class="btn secondary block" style="margin-top:10px" data-act="signin">Sign in</button>
+  <div class="fine">Your rotas are saved to your account, so they’re safe if you change or lose your phone.</div></div>`;
 }
 function renderSetup(){
   $('main').innerHTML=`<div class="welcome"><svg class="mark" viewBox="0 0 64 64"><use href="#logo"/></svg><h1>Set up your venue</h1><p class="lead">You can change these later in Settings.</p>
@@ -536,7 +538,7 @@ function renderSetup(){
   <label class="flabel">Area manager <span style="color:var(--text3);font-weight:400">(optional)</span></label><input class="input" id="s_mgr" value="${esc(S.profile.manager)}" placeholder="e.g. Steve Harris">
   </div>
   <button class="btn primary block" style="margin-top:6px" data-act="setup">Continue</button>
-  <button class="btn link block" style="margin-top:8px" data-act="sample">Explore with sample data</button></div>`;
+  <button class="btn link block" style="margin-top:8px" data-act="signout">Use a different account</button></div>`;
 }
 
 function renderRota(){
@@ -724,7 +726,7 @@ function renderSheet(){
     <button class="btn primary block" style="margin-top:20px" data-act="authgo" data-k="${k}">${{signup:'Create account',signin:'Sign in',forgot:'Send reset link',newpw:'Save password'}[k]}</button>
     <div class="formerr" id="ferr"></div>
     ${k==='signin'?'<div class="btns" style="margin-top:8px"><button class="btn link" data-act="forgot">Forgot password?</button><button class="btn link" data-act="signup">Create account</button></div>':''}
-    ${k==='signup'?`<div class="btns" style="margin-top:8px"><button class="btn link" data-act="signin">I already have an account</button></div>${isSetUp()?'<div class="fine" style="text-align:left">Your team and rotas on this device will be added to your new account.</div>':''}`:''}
+    ${k==='signup'?`<div class="btns" style="margin-top:8px"><button class="btn link" data-act="signin">I already have an account</button></div>`:''}
     </div>`;
   }
   if(sheet.type==='checkemail'){
@@ -808,13 +810,12 @@ async function downloadXlsx(){
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');if(!b||b.disabled)return;const a=b.dataset.act,D=b.dataset;
   switch(a){
-    case'nologin':S.prefs.onboarded=true;save();render();break;
     case'signup':openSheet({type:'signup'});break;
     case'signin':openSheet({type:'signin'});break;
     case'forgot':openSheet({type:'forgot',email:($('au_email')?.value||'').trim()});break;
     case'authgo':authSubmit(D.k,b);break;
     case'syncnow':if(session){startSync()}break;
-    case'signout':openSheet({type:'confirm',title:'Sign out?',text:'Your data is backed up to your account and will be removed from this device. Sign in again to get it back.',ok:'dosignout',okLabel:'Sign out'});break;
+    case'signout':if(!isSetUp()){signOut();break}openSheet({type:'confirm',title:'Sign out?',text:'Your data is backed up to your account and will be removed from this device. Sign in again to get it back.',ok:'dosignout',okLabel:'Sign out'});break;
     case'dosignout':signOut();break;
     case'image':makeImage();break;
     case'shareimg':markSent('image');shareImage();break;
@@ -976,7 +977,9 @@ if('serviceWorker' in navigator&&location.protocol==='https:'){try{navigator.ser
 
 /* ---------- start ---------- */
 applyTheme();render();
-setTimeout(()=>$('splash').classList.add('out'),1100);
+let splashMin=false,splashOut=false;function hideSplash(){if(splashOut)return;if(!splashMin||(!authReady&&sb))return;splashOut=true;$('splash').classList.add('out')}
+setTimeout(()=>{splashMin=true;hideSplash()},900);
+setTimeout(()=>{if(!authReady){authReady=true;render()}splashMin=true;hideSplash()},6000);
 </script>
 </body>
 </html>

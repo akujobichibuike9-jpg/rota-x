@@ -3,7 +3,7 @@
 Door rotas for head doormen. Pick who's working each night, set the hours, and send the week to the area manager as an image, Excel file or message.
 
 - Installable web app (PWA) with offline support, light and dark mode
-- Works without an account (saved on the device), or with an optional account that backs up and syncs through Supabase
+- Every head doorman signs in with an account; rotas are kept on the phone for offline use and synced to Supabase
 - Plain static site: no build step. `index.html` holds the whole app; `vendor/` holds the Supabase and SheetJS libraries
 
 ## Admin dashboard
