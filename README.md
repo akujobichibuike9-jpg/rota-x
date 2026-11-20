@@ -1,0 +1,13 @@
+# rota-x
+
+Door rotas for head doormen. Pick who's working each night, set the hours, and send the week to the area manager as an image, Excel file or message.
+
+- Installable web app (PWA) with offline support, light and dark mode
+- Works without an account (saved on the device), or with an optional account that backs up and syncs through Supabase
+- Plain static site: no build step. `index.html` holds the whole app; `vendor/` holds the Supabase and SheetJS libraries
+
+## Supabase
+
+`supabase/setup.sql` creates the `venues`, `staff` and `shifts` tables with row-level security so each account only sees its own venue. The project URL and publishable key are set at the top of the sync section in `index.html`.
+
+In Supabase → Authentication → URL Configuration, set the Site URL and a Redirect URL to the deployed address so confirmation and password-reset emails link back to the app.
